@@ -15,7 +15,60 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False):
+def _render_semantic_sanity(viewpoint_camera, pc: GaussianModel, pipe, means3D, means2D, opacity):
+    sem = pc.get_sem
+    if sem.shape[0] == 0:
+        H = int(viewpoint_camera.image_height)
+        W = int(viewpoint_camera.image_width)
+        D = int(getattr(pc, "sem_dim", 32))
+        return (
+            torch.zeros((H, W, D), device=means3D.device, dtype=means3D.dtype),
+            torch.zeros((H, W, D), device=means3D.device, dtype=means3D.dtype),
+            torch.zeros((H, W), device=means3D.device, dtype=means3D.dtype),
+        )
+
+    H = int(viewpoint_camera.image_height)
+    W = int(viewpoint_camera.image_width)
+    D = sem.shape[1]
+    sem_numer = torch.zeros((H, W, D), device=means3D.device, dtype=means3D.dtype)
+    w_denom = torch.zeros((H, W), device=means3D.device, dtype=means3D.dtype)
+    sem_numer_flat = sem_numer.view(-1, D)
+    w_denom_flat = w_denom.view(-1)
+
+    xs = means2D[:, 0]
+    ys = means2D[:, 1]
+    z = means3D[:, 2].abs() + 1e-6
+    w = (torch.sigmoid(opacity).squeeze(-1) / z).clamp_min(0.0)
+    valid = (xs >= 0) & (xs <= (W - 1)) & (ys >= 0) & (ys <= (H - 1)) & torch.isfinite(w)
+    if valid.any():
+        xv = xs[valid]
+        yv = ys[valid]
+        wv = w[valid]
+        sv = sem[valid]
+
+        x0 = torch.floor(xv).long().clamp(0, W - 1)
+        y0 = torch.floor(yv).long().clamp(0, H - 1)
+        x1 = (x0 + 1).clamp(0, W - 1)
+        y1 = (y0 + 1).clamp(0, H - 1)
+        wx = (xv - x0.float()).clamp(0.0, 1.0)
+        wy = (yv - y0.float()).clamp(0.0, 1.0)
+
+        bilinear = [
+            (x0, y0, (1.0 - wx) * (1.0 - wy)),
+            (x1, y0, wx * (1.0 - wy)),
+            (x0, y1, (1.0 - wx) * wy),
+            (x1, y1, wx * wy),
+        ]
+        for xx, yy, ww in bilinear:
+            contrib_w = ww * wv
+            pix_id = yy * W + xx
+            w_denom_flat.scatter_add_(0, pix_id, contrib_w)
+            sem_numer_flat.index_add_(0, pix_id, contrib_w[:, None] * sv)
+
+    sem_map = sem_numer / (w_denom[..., None] + getattr(pipe, "semantic_eps", 1e-6))
+    return sem_map, sem_numer, w_denom
+
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False, render_semantics=False):
     """
     Render the scene. 
     
@@ -87,8 +140,12 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
+    sem_map = None
+    sem_numer = None
+    w_denom = None
+    sem_features = pc.get_sem if render_semantics else None
     if separate_sh:
-        rendered_image, radii, depth_image = rasterizer(
+        raster_outputs = rasterizer(
             means3D = means3D,
             means2D = means2D,
             dc = dc,
@@ -97,9 +154,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             opacities = opacity,
             scales = scales,
             rotations = rotations,
-            cov3D_precomp = cov3D_precomp)
+            cov3D_precomp = cov3D_precomp,
+            sem_features = sem_features)
     else:
-        rendered_image, radii, depth_image = rasterizer(
+        raster_outputs = rasterizer(
             means3D = means3D,
             means2D = means2D,
             shs = shs,
@@ -107,7 +165,16 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             opacities = opacity,
             scales = scales,
             rotations = rotations,
-            cov3D_precomp = cov3D_precomp)
+            cov3D_precomp = cov3D_precomp,
+            sem_features = sem_features)
+
+    if len(raster_outputs) == 3:
+        rendered_image, radii, depth_image = raster_outputs
+    else:
+        rendered_image, radii, depth_image, sem_numer_chw, w_denom_hw = raster_outputs
+        sem_numer = sem_numer_chw.permute(1, 2, 0).contiguous()
+        w_denom = w_denom_hw.contiguous()
+        sem_map = sem_numer / (w_denom[..., None] + getattr(pipe, "semantic_eps", 1e-6))
         
     # Apply exposure to rendered image (training only)
     if use_trained_exp:
@@ -124,5 +191,12 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         "radii": radii,
         "depth" : depth_image
         }
+
+    if render_semantics:
+        if sem_map is None:
+            sem_map, sem_numer, w_denom = _render_semantic_sanity(viewpoint_camera, pc, pipe, means3D, means2D, opacity)
+        out["sem_map"] = sem_map
+        out["sem_numer"] = sem_numer
+        out["w_denom"] = w_denom
     
     return out

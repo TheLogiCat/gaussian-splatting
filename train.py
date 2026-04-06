@@ -14,6 +14,7 @@ import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
+from utils.semantic_utils import load_teacher_feature_map, semantic_cosine_loss, save_semantic_debug
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
@@ -62,6 +63,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE 
     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=opt.iterations)
+    use_semantics = bool(getattr(opt, "enable_semantics", False))
+    sem_teacher_dir = getattr(opt, "semantic_teacher_dir", "")
+    sem_debug_interval = max(1, int(getattr(opt, "semantic_debug_interval", 200)))
+    sem_vis_interval = max(1, int(getattr(opt, "semantic_vis_interval", 500)))
+    sem_loss_start_iter = int(getattr(opt, "semantic_loss_start_iter", 0))
+    sem_debug_dir = os.path.join(dataset.model_path, "semantic_debug")
+    if use_semantics:
+        os.makedirs(sem_debug_dir, exist_ok=True)
 
     viewpoint_stack = scene.getTrainCameras().copy()
     viewpoint_indices = list(range(len(viewpoint_stack)))
@@ -108,7 +117,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE)
+        render_pkg = render(
+            viewpoint_cam,
+            gaussians,
+            pipe,
+            bg,
+            use_trained_exp=dataset.train_test_exp,
+            separate_sh=SPARSE_ADAM_AVAILABLE,
+            render_semantics=use_semantics,
+        )
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         if viewpoint_cam.alpha_mask is not None:
@@ -139,6 +156,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             Ll1depth = 0
 
+        # Semantic supervision
+        Lsem = 0.0
+        if use_semantics and getattr(opt, "lambda_sem", 0.0) > 0.0 and iteration >= sem_loss_start_iter:
+            sem_map = render_pkg.get("sem_map", None)
+            w_denom = render_pkg.get("w_denom", None)
+            if sem_map is not None:
+                try:
+                    teacher_map = load_teacher_feature_map(
+                        sem_teacher_dir,
+                        viewpoint_cam.image_name,
+                        sem_map.device,
+                        sem_map.shape[-1],
+                        sem_map.shape[0],
+                        sem_map.shape[1],
+                    )
+                    valid_mask = None
+                    if w_denom is not None:
+                        valid_mask = w_denom > 1e-8
+                    Lsem_tensor = semantic_cosine_loss(sem_map, teacher_map, valid_mask=valid_mask)
+                    loss = loss + getattr(opt, "lambda_sem", 0.0) * Lsem_tensor
+                    Lsem = float(Lsem_tensor.detach().item())
+                except FileNotFoundError:
+                    pass
+
         loss.backward()
 
         iter_end.record()
@@ -156,6 +197,20 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
+            if use_semantics and tb_writer and iteration % sem_debug_interval == 0:
+                tb_writer.add_scalar('train_loss_semantics/cosine', Lsem, iteration)
+                sem_grad = gaussians.get_sem.grad
+                if sem_grad is not None:
+                    tb_writer.add_scalar('train_semantics/sem_grad_norm', sem_grad.norm().item(), iteration)
+                    print(f"[ITER {iteration}] semantic grad exists, norm={sem_grad.norm().item():.6f}")
+                else:
+                    print(f"[ITER {iteration}] semantic grad missing")
+
+            if use_semantics and iteration % sem_vis_interval == 0:
+                sem_map = render_pkg.get("sem_map", None)
+                w_denom = render_pkg.get("w_denom", None)
+                if sem_map is not None and w_denom is not None:
+                    save_semantic_debug(sem_debug_dir, iteration, viewpoint_cam.image_name, sem_map, w_denom)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -168,7 +223,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    gaussians.densify_and_prune(
+                        opt.densify_grad_threshold,
+                        0.005,
+                        scene.cameras_extent,
+                        size_threshold,
+                        radii,
+                        iteration=iteration,
+                        training_args=opt,
+                    )
+                    gate_stats = getattr(gaussians, "_last_semantic_gate_stats", None)
+                    if gate_stats and gate_stats.get("enabled", False):
+                        ratio = gate_stats["ratio"] * 100.0
+                        print(f"[ITER {iteration}] semantic truncation vetoed {gate_stats['vetoed']}/{gate_stats['total']} ({ratio:.2f}%)")
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
