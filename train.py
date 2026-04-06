@@ -202,9 +202,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 semantic_grad = gaussians.get_sem.grad
                 if semantic_grad is not None:
                     tb_writer.add_scalar('train_semantics/sem_grad_norm', semantic_grad.norm().item(), iteration)
-                    print(f"[ITER {iteration}] semantic grad exists, norm={semantic_grad.norm().item():.6f}")
                 else:
-                    print(f"[ITER {iteration}] semantic grad missing")
+                    tb_writer.add_scalar('train_semantics/sem_grad_norm', 0.0, iteration)
 
             if use_semantics and iteration % sem_vis_interval == 0:
                 sem_map = render_pkg.get("sem_map", None)

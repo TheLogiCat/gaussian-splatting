@@ -14,7 +14,7 @@ def _to_chw(x: torch.Tensor) -> torch.Tensor:
 
 
 def load_teacher_feature_map(teacher_dir: str, image_name: str, device: torch.device, sem_dim: int, height: int, width: int) -> torch.Tensor:
-    if teacher_dir is None or teacher_dir == "":
+    if not teacher_dir:
         raise FileNotFoundError("semantic_teacher_dir is empty")
     candidates = [
         os.path.join(teacher_dir, f"{image_name}.pt"),
@@ -98,6 +98,8 @@ def save_semantic_debug(out_dir: str, iteration: int, image_name: str, sem_map: 
 
 
 def save_teacher_manifest(path: str, payload: dict):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)
