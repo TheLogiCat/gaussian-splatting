@@ -15,6 +15,8 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
+MAX_SANITY_SEM_WEIGHT = 1e3
+
 def _render_semantic_sanity(viewpoint_camera, pc: GaussianModel, pipe, means3D, means2D, opacity):
     sem = pc.get_sem
     if sem.shape[0] == 0:
@@ -38,7 +40,7 @@ def _render_semantic_sanity(viewpoint_camera, pc: GaussianModel, pipe, means3D, 
     xs = means2D[:, 0]
     ys = means2D[:, 1]
     z = means3D[:, 2].abs() + 1e-6
-    w = (torch.sigmoid(opacity).squeeze(-1) / z).clamp_min(0.0)
+    w = (torch.sigmoid(opacity).squeeze(-1) / z).clamp(0.0, MAX_SANITY_SEM_WEIGHT)
     valid = (xs >= 0) & (xs <= (W - 1)) & (ys >= 0) & (ys <= (H - 1)) & torch.isfinite(w)
     if valid.any():
         xv = xs[valid]

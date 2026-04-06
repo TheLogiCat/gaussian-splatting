@@ -28,6 +28,9 @@ try:
 except:
     pass
 
+SEM_INIT_SCALE = 0.01
+SELF_DISTANCE_SENTINEL = 1e9
+
 class GaussianModel:
 
     def setup_functions(self):
@@ -197,7 +200,7 @@ class GaussianModel:
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
-        sem = torch.randn((fused_point_cloud.shape[0], self.sem_dim), device="cuda", dtype=torch.float32) * 0.01
+        sem = torch.randn((fused_point_cloud.shape[0], self.sem_dim), device=fused_point_cloud.device, dtype=torch.float32) * SEM_INIT_SCALE
         self._sem = nn.Parameter(sem.requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
@@ -476,8 +479,7 @@ class GaussianModel:
         sem = self._sem.detach()
         xyz_candidates = xyz[idx]
         d2 = torch.cdist(xyz_candidates, xyz, p=2)
-        self_mask = idx[:, None] == torch.arange(xyz.shape[0], device=xyz.device)[None, :]
-        d2[self_mask] = 1e9
+        d2[torch.arange(idx.numel(), device=xyz.device), idx] = SELF_DISTANCE_SENTINEL
         knn_idx = torch.topk(d2, k=k, dim=1, largest=False).indices
 
         sem_j = F.normalize(sem[idx], dim=-1)

@@ -63,7 +63,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE 
     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=opt.iterations)
-    use_semantics = bool(getattr(opt, "enable_semantics", False))
+    use_semantics = getattr(opt, "enable_semantics", False)
     sem_teacher_dir = getattr(opt, "semantic_teacher_dir", "")
     sem_debug_interval = max(1, int(getattr(opt, "semantic_debug_interval", 200)))
     sem_vis_interval = max(1, int(getattr(opt, "semantic_vis_interval", 500)))
@@ -176,7 +176,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         valid_mask = w_denom > 1e-8
                     Lsem_tensor = semantic_cosine_loss(sem_map, teacher_map, valid_mask=valid_mask)
                     loss = loss + getattr(opt, "lambda_sem", 0.0) * Lsem_tensor
-                    Lsem = float(Lsem_tensor.detach().item())
+                    Lsem = float(Lsem_tensor.item())
                 except FileNotFoundError:
                     pass
 
@@ -199,10 +199,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if use_semantics and tb_writer and iteration % sem_debug_interval == 0:
                 tb_writer.add_scalar('train_loss_semantics/cosine', Lsem, iteration)
-                sem_grad = gaussians.get_sem.grad
-                if sem_grad is not None:
-                    tb_writer.add_scalar('train_semantics/sem_grad_norm', sem_grad.norm().item(), iteration)
-                    print(f"[ITER {iteration}] semantic grad exists, norm={sem_grad.norm().item():.6f}")
+                semantic_grad = gaussians.get_sem.grad
+                if semantic_grad is not None:
+                    tb_writer.add_scalar('train_semantics/sem_grad_norm', semantic_grad.norm().item(), iteration)
+                    print(f"[ITER {iteration}] semantic grad exists, norm={semantic_grad.norm().item():.6f}")
                 else:
                     print(f"[ITER {iteration}] semantic grad missing")
 

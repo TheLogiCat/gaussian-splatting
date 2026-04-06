@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
 
+RANDOM_NOISE_SCALE = 0.01
+
 
 def list_images(images_dir: Path):
     exts = {".png", ".jpg", ".jpeg", ".bmp"}
@@ -42,7 +44,7 @@ def infer_dinov2(model, image_tensor, device, out_h, out_w):
 def infer_random_feature(image_tensor, out_dim):
     C, H, W = image_tensor.shape
     x = image_tensor.mean(dim=0, keepdim=True).repeat(out_dim, 1, 1)
-    x = x + 0.01 * torch.randn_like(x)
+    x = x + RANDOM_NOISE_SCALE * torch.randn_like(x)
     return x
 
 
@@ -86,7 +88,12 @@ def main():
             elif feat.shape[0] < args.feature_dim:
                 pad = torch.zeros((args.feature_dim - feat.shape[0], H, W), dtype=feat.dtype)
                 feat = torch.cat([feat, pad], dim=0)
-        torch.save({"feature_map": feat, "image_name": p.name, "source": "dinov2" if not use_random else "random"}, output_dir / f"{p.name}.pt")
+        payload = {
+            "feature_map": feat,
+            "image_name": p.name,
+            "source": "dinov2" if not use_random else "random",
+        }
+        torch.save(payload, output_dir / f"{p.stem}.pt")
 
     manifest = {
         "num_images": len(images),

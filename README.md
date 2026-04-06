@@ -227,7 +227,7 @@ When semantics are disabled (`--enable_semantics` not set), behavior remains bac
 - `--semantic_dim`: semantic dimension (default `32`)
 - `--semantic_lr`: semantic parameter learning rate
 - `--lambda_sem`: semantic loss weight (default `0.0`)
-- `--semantic_teacher_dir`: directory containing per-image teacher feature maps (`<image_name>.pt`)
+- `--semantic_teacher_dir`: directory containing per-image teacher feature maps (`<image_stem>.pt`)
 - `--semantic_loss_start_iter`: semantic loss start iteration
 - `--semantic_debug_interval`: semantic loss / grad logging interval
 - `--semantic_vis_interval`: semantic debug image dump interval
@@ -252,7 +252,7 @@ python scripts/precompute_teacher_features.py \
   --teacher dinov2_vitb14
 ```
 
-This writes one file per image: `<image_name>.pt`, plus `manifest.json`.
+This writes one file per image: `<image_stem>.pt`, plus `manifest.json`.
 
 #### Example commands
 

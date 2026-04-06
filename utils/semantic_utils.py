@@ -16,9 +16,17 @@ def _to_chw(x: torch.Tensor) -> torch.Tensor:
 def load_teacher_feature_map(teacher_dir: str, image_name: str, device: torch.device, sem_dim: int, height: int, width: int) -> torch.Tensor:
     if teacher_dir is None or teacher_dir == "":
         raise FileNotFoundError("semantic_teacher_dir is empty")
-    base = os.path.join(teacher_dir, f"{image_name}.pt")
-    if not os.path.exists(base):
-        raise FileNotFoundError(f"Teacher feature file not found: {base}")
+    candidates = [
+        os.path.join(teacher_dir, f"{image_name}.pt"),
+        os.path.join(teacher_dir, f"{os.path.splitext(image_name)[0]}.pt"),
+    ]
+    base = None
+    for c in candidates:
+        if os.path.exists(c):
+            base = c
+            break
+    if base is None:
+        raise FileNotFoundError(f"Teacher feature file not found for {image_name} in {teacher_dir}")
     feat = torch.load(base, map_location="cpu")
     if isinstance(feat, dict):
         if "feature_map" in feat:
@@ -64,13 +72,17 @@ def pca_to_rgb(feature_map: torch.Tensor) -> torch.Tensor:
 
 
 def write_rgb_tensor(path: str, rgb_hwc: torch.Tensor):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     arr = (rgb_hwc.detach().cpu().clamp(0.0, 1.0).numpy() * 255.0).astype("uint8")
     Image.fromarray(arr).save(path)
 
 
 def write_gray_tensor(path: str, gray_hw: torch.Tensor):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     x = gray_hw.detach().cpu()
     x = (x - x.min()) / (x.max() - x.min() + 1e-6)
     arr = (x.numpy() * 255.0).astype("uint8")
