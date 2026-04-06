@@ -207,6 +207,99 @@ python train.py -s <path to COLMAP or NeRF Synthetic dataset>
 </details>
 <br>
 
+### Semantic Feature Rendering + Semantic Truncation (MVP)
+
+This repository now supports an optional semantic pipeline on top of default 3DGS:
+
+- Per-Gaussian semantic gene vectors (`D=32` by default)
+- Per-pixel semantic rendering via weighted average:
+  - `sem_numer(p) = sum_j w_j(p) * sem_j`
+  - `w_denom(p) = sum_j w_j(p)`
+  - `sem_map(p) = sem_numer(p) / (w_denom(p) + eps)`
+- Semantic teacher supervision with cosine loss
+- Semantic-guided densification truncation to reduce boundary bleeding
+
+When semantics are disabled (`--enable_semantics` not set), behavior remains backward-compatible with baseline training/rendering.
+
+#### Semantic CLI options (train.py)
+
+- `--enable_semantics`: enable semantic path
+- `--semantic_dim`: semantic dimension (default `32`)
+- `--semantic_lr`: semantic parameter learning rate
+- `--lambda_sem`: semantic loss weight (default `0.0`)
+- `--semantic_teacher_dir`: directory containing per-image teacher feature maps (`<image_name>.pt`)
+- `--semantic_loss_start_iter`: semantic loss start iteration
+- `--semantic_debug_interval`: semantic loss / grad logging interval
+- `--semantic_vis_interval`: semantic debug image dump interval
+- `--semantic_eps`: weighted-average stability epsilon
+- `--semantic_render_mode`: semantic render mode (`sanity` by default)
+- `--semantic_truncation_enable`: enable semantic truncation engine for densification gating
+- `--semantic_truncation_hard`: use hard veto (ablation mode)
+- `--semantic_truncation_tau`: semantic variance threshold
+- `--semantic_truncation_k`: kNN neighborhood size
+- `--semantic_truncation_start_iter`: truncation start iteration
+- `--semantic_truncation_alpha_init`, `--semantic_truncation_alpha_final`, `--semantic_truncation_alpha_end_iter`: soft gating anneal controls
+
+#### Offline teacher feature preprocessing
+
+Use:
+
+```shell
+python scripts/precompute_teacher_features.py \
+  --images_dir <path to dataset/images> \
+  --output_dir <path to teacher_feature_dir> \
+  --feature_dim 32 \
+  --teacher dinov2_vitb14
+```
+
+This writes one file per image: `<image_name>.pt`, plus `manifest.json`.
+
+#### Example commands
+
+Baseline:
+
+```shell
+python train.py -s <path to COLMAP dataset> -m <output_model_dir>
+```
+
+Semantic supervision only:
+
+```shell
+python train.py -s <path to COLMAP dataset> -m <output_model_dir> \
+  --enable_semantics \
+  --lambda_sem 0.05 \
+  --semantic_teacher_dir <path to teacher_feature_dir>
+```
+
+Semantic supervision + semantic truncation:
+
+```shell
+python train.py -s <path to COLMAP dataset> -m <output_model_dir> \
+  --enable_semantics \
+  --lambda_sem 0.05 \
+  --semantic_teacher_dir <path to teacher_feature_dir> \
+  --semantic_truncation_enable \
+  --semantic_truncation_tau 0.08 \
+  --semantic_truncation_k 8
+```
+
+#### Debug visualizations
+
+During training, semantic debug outputs are written to:
+
+- `<model_path>/semantic_debug/*_sem_pca.png` (PCA RGB of `sem_map`)
+- `<model_path>/semantic_debug/*_w_denom.png` (semantic denominator map)
+
+Use these to compare boundary behavior before/after truncation.
+
+#### Ablation table template
+
+| Method | PSNR ↑ | SSIM ↑ | LPIPS ↓ | Boundary bleeding (qualitative) |
+|---|---:|---:|---:|---|
+| Baseline 3DGS |  |  |  |  |
+| + Semantic loss |  |  |  |  |
+| + Semantic loss + Semantic truncation |  |  |  |  |
+
 Note that similar to MipNeRF360, we target images at resolutions in the 1-1.6K pixel range. For convenience, arbitrary-size inputs can be passed and will be automatically resized if their width exceeds 1600 pixels. We recommend to keep this behavior, but you may force training to use your higher-resolution images by setting ```-r 1```.
 
 The MipNeRF360 scenes are hosted by the paper authors [here](https://jonbarron.info/mipnerf360/). You can find our SfM data sets for Tanks&Temples and Deep Blending [here](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip). If you do not provide an output model directory (```-m```), trained models are written to folders with randomized unique names inside the ```output``` directory. At this point, the trained models may be viewed with the real-time viewer (see further below).
