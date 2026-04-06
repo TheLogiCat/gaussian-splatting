@@ -69,6 +69,8 @@ class PipelineParams(ParamGroup):
         self.compute_cov3D_python = False
         self.debug = False
         self.antialiasing = False
+        self.semantic_render_mode = "sanity"
+        self.semantic_eps = 1e-6
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
@@ -97,6 +99,22 @@ class OptimizationParams(ParamGroup):
         self.depth_l1_weight_final = 0.01
         self.random_background = False
         self.optimizer_type = "default"
+        self.enable_semantics = False
+        self.semantic_dim = 32
+        self.semantic_lr = 0.0025
+        self.lambda_sem = 0.0
+        self.semantic_teacher_dir = ""
+        self.semantic_loss_start_iter = 0
+        self.semantic_debug_interval = 200
+        self.semantic_vis_interval = 500
+        self.semantic_truncation_enable = False
+        self.semantic_truncation_hard = False
+        self.semantic_truncation_tau = 0.08
+        self.semantic_truncation_k = 8
+        self.semantic_truncation_start_iter = 1000
+        self.semantic_truncation_alpha_init = 4.0
+        self.semantic_truncation_alpha_final = 20.0
+        self.semantic_truncation_alpha_end_iter = 15000
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):
